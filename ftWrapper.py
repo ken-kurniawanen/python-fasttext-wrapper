@@ -1,7 +1,7 @@
 """
 ===fastText Python Wrapper===
 
-    This module calls Facebook fastText C++ library from your beloved Python.
+    This module calls Facebook fastText shell from your beloved Python.
 It reproduces fastText function by calling shell command in Python. Also handled input and output conversion.
 
 PS : Use the fastText default format __label__{label}
@@ -11,21 +11,32 @@ import os.path
 from subprocess import run
 import subprocess
 
-# Specify fastText directory
+import numpy as np
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import f1_score
+from sklearn.metrics import precision_score
+from sklearn.metrics import confusion_matrix
+
+# specify fastText directory
 Path = '/jet/prs/workspace/fastText-0.2.0/'
 
 
 def train(X,y, pretrained = None, dim=100 ,Ngrams=1,epochs=5, minn=3,maxn=6, model="model"):
     """
     Equivalent to ./fasttext supervised
+    
+    produce model.bin in fastText directory for predict purpose
+
+    X = Series or list containing text
+    y = Series or list containing label
 
     Option :
-    -pretrainedVectors  pretrained word vectors for supervised learning []
+    -pretrainedVectors  specify path of pretrained word vectors for supervised learning []
     -wordNgrams         max length of word ngram [1]
     -epoch              number of epochs [5]
     -minn               min length of char ngram [3]
     -maxn               max length of char ngram [6]
-    -model              specify your path and name for model .bin and .vec if you don't want to overwrite the default model.bin
+    -model              specify name for model .bin and .vec if you don't want to overwrite the default model.bin
     """
 
     cmd = Path + "fasttext supervised -input " + Path + "train__Data.txt" + " -output " + Path + "model" + " -dim " + str(dim) + " -minn " + str(minn) + " -maxn " + str(maxn) +" -wordNgrams " + str(Ngrams) + " -epoch " + str(epochs)
@@ -33,6 +44,7 @@ def train(X,y, pretrained = None, dim=100 ,Ngrams=1,epochs=5, minn=3,maxn=6, mod
     if pretrained:
         cmd = cmd + " -pretrainedVectors " + pretrained
 
+    # input handling
     if os.path.isfile(Path + "train__Data.txt"):
         os.remove(Path + "train__Data.txt", dir_fd=None)
 
@@ -41,6 +53,7 @@ def train(X,y, pretrained = None, dim=100 ,Ngrams=1,epochs=5, minn=3,maxn=6, mod
             f.write('__label__' + str(y[i]) + ' ' + x)
             f.write('\n')       
     
+    # error checking, pass STDERR or STDOUT to Python
     try:
         out = subprocess.run(cmd, stderr=subprocess.PIPE, shell=True, check=True)
         print(cmd)
@@ -52,6 +65,13 @@ def train(X,y, pretrained = None, dim=100 ,Ngrams=1,epochs=5, minn=3,maxn=6, mod
 
     
 def score(X,y):
+    """
+    Equivalent of fastText ./fasttext test
+
+    X = Series or list containing text
+    y = Series or list containing label
+    """
+    # input handling
     if os.path.isfile(Path + "test__Data.txt"):
         os.remove(Path + "test__Data.txt", dir_fd=None)
     with open(Path + 'test__Data.txt', 'a') as f:
@@ -66,6 +86,11 @@ def score(X,y):
             print(e)
         
 def predict_proba(X):
+    """
+    Equivalent of  ./fasttext predict-prob
+
+    X = Series or list containing text to predict
+    """
     if os.path.isfile(Path + "predict__Data.txt"):
         os.remove(Path + "predict__Data.txt", dir_fd=None)
     with open(Path + 'predict__Data.txt', 'a') as f:
@@ -74,32 +99,62 @@ def predict_proba(X):
             f.write('\n')
 
     run(Path + "fasttext predict-prob " + Path + "model.bin " + Path + "predict__Data.txt > " + Path + "outputPredictions.txt",shell=True)
-    ##read the predictions and print them
+    
+    # read the predictions and output as list
     with open(Path + 'outputPredictions.txt') as f:
         outputPredictions = f.readlines()
     
     return outputPredictions
 
-def predict(X):
+def predict(X, model="model.bin"):
+    """
+    Equivalent of  ./fasttext predict
+    Return list of prediction per line
+
+    X = Series or list containing text to predict
+
+    Option :
+    -model              specify name for model .bin and .vec in fastText directory
+    """
+
+    # input handling
     if os.path.isfile(Path + "predict__Data.txt"):
         os.remove(Path + "predict__Data.txt", dir_fd=None)
-
     with open(Path + 'predict__Data.txt', 'a') as f:
         for x in X:
             f.write(str(x))
             f.write('\n')
             
-    run(Path + "fasttext predict " + Path + "model.bin " + Path + "predict__Data.txt > " + Path + "outputPredictions.txt", shell=True)
+    run(Path + "fasttext predict " + Path + model + " " + Path + "predict__Data.txt > " + Path + "outputPredictions.txt", shell=True)
     
+    # read the prediction and output as list
     with open(Path + 'outputPredictions.txt') as f:
         outputPredictions = f.readlines()
 
+    # optional adjustment to remove _label_
     for idx,i in enumerate(outputPredictions):
         outputPredictions[idx] = ''.join(filter(lambda x: x.isdigit(), i))
 
     return outputPredictions
 
-def cross_val_score():
+def cross_val_score(data, pretrained = None, dim=100 ,Ngrams=1,epochs=5, minn=3,maxn=6,k=5):
+    """
+    Run cross validation based on fastText model and sklearn style data.
+    Return list of evaluation metric.
+    Output evaluation metric list's mean and confusion matrix of last fold.
+
+    data = DataFrame containing "text" column and "label" column
+
+    Option:
+    Option :
+    -pretrainedVectors  specify path of pretrained word vectors for supervised learning []
+    -wordNgrams         max length of word ngram [1]
+    -epoch              number of epochs [5]
+    -minn               min length of char ngram [3]
+    -maxn               max length of char ngram [6]
+    -k                  number of fold [5]
+    """
+
     acc_list = []
     precision_list = []
     f1_list = []
@@ -109,8 +164,8 @@ def cross_val_score():
         test = data.loc[len(data)//k*(fold-1):len(data)//k*fold-1]
         train = data[~data.index.isin(test.index)]
         
-        ftWrapper.train(train['text'].tolist(),train['label'].tolist(), dim=dim, pretrained=pretrained, minn=minn ,maxn=maxn, epochs = epochs)
-        pred = ftWrapper.predict(test['text'].tolist())
+        train(train['text'].tolist(),train['label'].tolist(), dim=dim, pretrained=pretrained, minn=minn ,maxn=maxn, epochs = epochs)
+        pred = predict(test['text'].tolist())
 
         acc_list.append(accuracy_score(pred, test['label'].tolist()))
         precision_list.append(precision_score(pred, test['label'].tolist(), average='weighted'))
